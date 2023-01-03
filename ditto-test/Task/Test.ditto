@@ -1,0 +1,96 @@
+module Task.Test exports (
+    main,
+);
+
+import (js-exception) Exception;
+
+import (js-unknown) Unknown (
+    Unknown,
+);
+
+import (std) Array;
+import (std) Bool;
+import (std) Effect (
+    VoidEffect,
+);
+import (std) Maybe (
+    Maybe(..),
+);
+import (std) Never (
+    Never,
+);
+import (std) Result (
+    Result(..),
+);
+
+import Task (
+    Task,
+);
+
+
+type alias Log = (String) -> VoidEffect;
+
+task_one = fn (log: Log): Task(Unit, Unknown) ->
+    Task.from_effect(log("task one: sleeping for 2 seconds"))
+    |> Task.and_then(fn (_) -> sleep(Task.Seconds(2)))
+    |> Task.and_then(fn (_) -> Task.from_effect(log("task one: done")));
+
+task_two = fn (log: Log): Task(Unit, Unknown) ->
+    Task.from_effect(log("task two: sleeping for 4 seconds"))
+    |> Task.and_then(fn (_) -> sleep(Task.Seconds(4)))
+    |> Task.and_then(fn (_) -> Task.from_effect(log("task two: done")));
+
+task_three = fn (log: Log): Task(Unit, Unknown) ->
+    Task.from_effect(
+        log("task three: sleeping for 10 seconds with 1 second timeout"),
+    )
+    |> Task.and_then(
+        fn (_) ->
+            sleep(Task.Seconds(10))
+            |> Task.with_timeout(Task.Seconds(1)),
+    )
+    |> Task.and_then(
+        fn (timed_out) ->
+            match timed_out with
+            | Nothing -> Task.from_effect(log("task three: timed out"))
+            | Just(_) -> Task.from_effect(
+                do {
+                    log("task three: didn't time out?");
+                    Exception.throw("task three: didn't time out!?")
+                },
+            )
+            end,
+    );
+
+main = fn (log: Log, fail: VoidEffect): VoidEffect -> do {
+    let tasks = [task_one(log), task_two(log), task_three(log)];
+    Task.fork(
+        Task.all_unbounded(tasks),
+        fn (result) ->
+            match result with
+            | Ok(results) ->
+                if
+                    Array.is_empty(results.errs)
+                    |> Bool.not
+                then
+                    fail
+                else
+                    Effect.noop
+            | Err(_) -> fail
+            end,
+    );
+    cancel <- Task.fork(
+        sleep(Task.Seconds(20)),
+        fn (result) ->
+            match result with
+            | Ok(_) -> fail
+            | Err(_) -> fail
+            end,
+    );
+    cancel;
+    return unit
+};
+
+sleep = fn (duration): Task(Unit, e) ->
+    Task.sleep(duration)
+    |> Task.map_err(Never.unreachable);
