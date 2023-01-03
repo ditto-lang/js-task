@@ -1,0 +1,7 @@
+name = "js-task"
+targets = ["web", "nodejs"]
+dependencies = ["std", "js-ref", "js-unknown", "js-exception"]
+
+[[package-set.extends]]
+url = "https://raw.githubusercontent.com/ditto-lang/package-sets/5b57e1f5ba89740f31f67bd31b65c2d871a711f6/packages.toml"
+sha256 = "f3661a72b4e0de86b0357b49e598aa265e1bca8d3cae39cc4a8ddad60a1eac7a"

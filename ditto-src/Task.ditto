@@ -1,0 +1,254 @@
+module Task exports (
+    Task,
+    Callback,
+    Duration(..),
+    succeed,
+    fail,
+    fork,
+    sleep,
+    from_effect,
+    map_err,
+    all_unbounded,
+    and_then,
+    race,
+    with_timeout,
+);
+
+import (js-exception) Exception;
+
+import (js-ref) Ref;
+
+import (js-unknown) Unknown (
+    Unknown,
+);
+
+import (std) Array;
+import (std) Effect (
+    VoidEffect,
+);
+import (std) Int;
+import (std) Maybe (
+    Maybe(..),
+);
+import (std) Never (
+    Never,
+);
+import (std) Pair (
+    Pair(..),
+);
+import (std) Result (
+    Result(..),
+);
+import (std) StringMap;
+
+
+type alias Cancel = VoidEffect;
+
+type alias Callback(a, e) = (Result(a, e)) -> VoidEffect;
+
+type Task(a, e) = Task((Callback(a, e)) -> Effect(Cancel));
+
+succeed = fn (a) -> Task(
+    fn (callback) -> do {
+        callback(Ok(a));
+        return Effect.noop
+    },
+);
+
+fail = fn (e): Task(a, e) -> Task(
+    fn (callback) -> do {
+        callback(Err(e));
+        return Effect.noop
+    },
+);
+
+fork = fn (Task(callback), result_handler: Callback(a, e)): Effect(Cancel) ->
+    callback(result_handler);
+
+map = fn (Task(previous): Task(a, e), f: (a) -> b): Task(b, e) -> Task(
+    fn (next) -> previous(fn (result) -> next(Result.map(result, f))),
+);
+
+map_err = fn (Task(previous): Task(a, e), f: (e) -> eek): Task(a, eek) -> Task(
+    fn (next) -> previous(fn (result) -> next(Result.map_err(result, f))),
+);
+
+and_then = fn (task: Task(a, e), f: (a) -> Task(b, e)): Task(b, e) -> sequence(
+    map(task, f),
+);
+
+from_effect = fn (effect: Effect(a)): Task(a, Unknown) -> Task(
+    fn (callback) -> do {
+        result <- Exception.try_catch(effect);
+        callback(result);
+        return Effect.noop
+    },
+);
+
+sequence = fn (Task(previous): Task(Task(a, e), e)): Task(a, e) -> Task(
+    fn (next) -> do {
+        cancel_next_ref <- Ref.new(Effect.noop);
+        cancel_previous <- previous(
+            fn (result) ->
+                match result with
+                | Ok(task) -> do {
+                    cancel <- fork(task, next);
+                    Effect.discard(Ref.set(cancel_next_ref, cancel))
+                }
+                | Err(err) -> next(Err(err))
+                end,
+        );
+        return do {
+            cancel_previous;
+            cancel_next <- Ref.get(cancel_next_ref);
+            cancel_next
+        }
+    },
+);
+
+all_unbounded = fn (tasks: Array(Task(a, e))): Task(
+    { oks: Array(a), errs: Array(e) },
+    Never,
+) ->
+    let
+        tasks_length = Array.length(tasks);
+    in
+    Task(
+        fn (callback) -> do {
+            oks_ref <- Ref.new([]);
+            errs_ref <- Ref.new([]);
+            cancels_ref <- Ref.new(StringMap.empty);
+            Effect.for_each(
+                Array.map_with_index(tasks, Pair),
+                fn (Pair(i, task)) -> do {
+                    let key = Int.to_string(i);
+                    cancel <- fork(
+                        task,
+                        fn (result) -> do {
+                            Ref.modify(
+                                cancels_ref,
+                                fn (sm) -> StringMap.remove(sm, key),
+                            );
+                            match result with
+                            | Ok(a) -> do {
+                                oks <- Ref.modify(
+                                    oks_ref,
+                                    fn (oks) -> Array.push_end(oks, a),
+                                );
+                                errs <- Ref.get(errs_ref);
+                                Effect.when(
+                                    Int.add(
+                                        Array.length(oks),
+                                        Array.length(errs),
+                                    )
+                                    |> Int.is_eq(tasks_length),
+                                    callback(Ok({ oks = oks, errs = errs })),
+                                )
+                            }
+                            | Err(e) -> do {
+                                errs <- Ref.modify(
+                                    errs_ref,
+                                    fn (errs) -> Array.push_end(errs, e),
+                                );
+                                oks <- Ref.get(oks_ref);
+                                Effect.when(
+                                    Int.add(
+                                        Array.length(oks),
+                                        Array.length(errs),
+                                    )
+                                    |> Int.is_eq(tasks_length),
+                                    callback(Ok({ oks = oks, errs = errs })),
+                                )
+                            }
+                            end
+                        },
+                    );
+                    Ref.modify(
+                        cancels_ref,
+                        fn (sm) -> StringMap.insert(sm, key, cancel),
+                    );
+                    return unit
+                },
+            );
+            return do {
+                cancels <- Ref.get(cancels_ref);
+                Effect.discard(Effect.sequence(StringMap.values(cancels)))
+            }
+        },
+    );
+
+race = fn (task_a: Task(a, e), task_b: Task(a, e)): Task(a, e) -> Task(
+    fn (result_handler) -> do {
+        done_ref <- Ref.new(false);
+        cancel_a_ref <- Ref.new(Nothing);
+        cancel_b_ref <- Ref.new(Nothing);
+        cancel_a <- fork(
+            task_a,
+            fn (result) -> do {
+                Ref.set(cancel_a_ref, Nothing);
+                done <- Ref.get(done_ref);
+                Effect.unless(
+                    done,
+                    do {
+                        Ref.set(done_ref, true);
+                        cancel_b <- Ref.get(cancel_b_ref);
+                        Maybe.with_default(cancel_b, Effect.noop);
+                        result_handler(result)
+                    },
+                )
+            },
+        );
+        cancel_b <- fork(
+            task_b,
+            fn (result) -> do {
+                Ref.set(cancel_b_ref, Nothing);
+                done <- Ref.get(done_ref);
+                Effect.unless(
+                    done,
+                    do {
+                        Ref.set(done_ref, true);
+                        cancel_a <- Ref.get(cancel_a_ref);
+                        Maybe.with_default(cancel_a, Effect.noop);
+                        result_handler(result)
+                    },
+                )
+            },
+        );
+        Ref.set(cancel_a_ref, Just(cancel_a));
+        Ref.set(cancel_b_ref, Just(cancel_b));
+        return do {
+            cancel_a <- Ref.get(cancel_a_ref);
+            Maybe.with_default(cancel_a, Effect.noop);
+            cancel_b <- Ref.get(cancel_b_ref);
+            Maybe.with_default(cancel_b, Effect.noop)
+        }
+    },
+);
+
+with_timeout = fn (task: Task(a, e), timeout: Duration): Task(Maybe(a), e) ->
+    race(
+        task
+        |> map(Just),
+        sleep(timeout)
+        |> map(fn (_) -> Nothing)
+        |> map_err(Never.unreachable),
+    );
+
+sleep = fn (duration: Duration): Task(Unit, Never) -> Task(
+    fn (result_handler) -> sleep_impl(
+        duration_to_millis(duration),
+        result_handler(Ok(unit)),
+    ),
+);
+
+type Duration =
+    | Seconds(Int)
+    | Milliseconds(Int);
+
+duration_to_millis = fn (duration) ->
+    match duration with
+    | Seconds(secs) -> Int.multiply(secs, 1000)
+    | Milliseconds(millis) -> millis
+    end;
+
+foreign sleep_impl: (Int, VoidEffect) -> Effect(Cancel);
