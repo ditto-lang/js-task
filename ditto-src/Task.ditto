@@ -7,6 +7,7 @@ module Task exports (
     fork,
     sleep,
     from_effect,
+    map,
     map_err,
     all_unbounded,
     and_then,
