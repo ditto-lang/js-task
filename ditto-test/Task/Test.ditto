@@ -10,9 +10,7 @@ import (js-unknown) Unknown (
 
 import (std) Array
 import (std) Bool
-import (std) Effect (
-    VoidEffect,
-)
+import (std) Effect
 import (std) Maybe (
     Maybe(..),
 )
@@ -28,7 +26,7 @@ import Task (
 )
 
 
-type alias Log = (String) -> VoidEffect
+type alias Log = (String) -> Effect(Unit)
 
 task_one = fn (log: Log): Task(Unit, Unknown) ->
     Task.from_effect(log("task one: sleeping for 2 seconds"))
@@ -62,7 +60,7 @@ task_three = fn (log: Log): Task(Unit, Unknown) ->
             end,
     )
 
-main = fn (log: Log, fail: VoidEffect): VoidEffect -> do {
+main = fn (log: Log, fail: Effect(Unit)): Effect(Unit) -> do {
     let tasks = [task_one(log), task_two(log), task_three(log)];
     Task.fork(
         Task.all_unbounded(tasks),

@@ -24,9 +24,7 @@ import (js-unknown) Unknown (
 )
 
 import (std) Array
-import (std) Effect (
-    VoidEffect,
-)
+import (std) Effect
 import (std) Int
 import (std) Maybe (
     Maybe(..),
@@ -43,9 +41,9 @@ import (std) Result (
 import (std) StringMap
 
 
-type alias Cancel = VoidEffect
+type alias Cancel = Effect(Unit)
 
-type alias Callback(a, e) = (Result(a, e)) -> VoidEffect
+type alias Callback(a, e) = (Result(a, e)) -> Effect(Unit)
 
 type Task(a, e) = Task((Callback(a, e)) -> Effect(Cancel))
 
@@ -252,4 +250,4 @@ duration_to_millis = fn (duration) ->
     | Milliseconds(millis) -> millis
     end
 
-foreign sleep_impl: (Int, VoidEffect) -> Effect(Cancel)
+foreign sleep_impl: (Int, Effect(Unit)) -> Effect(Cancel)
