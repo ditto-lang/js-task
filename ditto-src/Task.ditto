@@ -13,70 +13,70 @@ module Task exports (
     and_then,
     race,
     with_timeout,
-);
+)
 
-import (js-exception) Exception;
+import (js-exception) Exception
 
-import (js-ref) Ref;
+import (js-ref) Ref
 
 import (js-unknown) Unknown (
     Unknown,
-);
+)
 
-import (std) Array;
+import (std) Array
 import (std) Effect (
     VoidEffect,
-);
-import (std) Int;
+)
+import (std) Int
 import (std) Maybe (
     Maybe(..),
-);
+)
 import (std) Never (
     Never,
-);
+)
 import (std) Pair (
     Pair(..),
-);
+)
 import (std) Result (
     Result(..),
-);
-import (std) StringMap;
+)
+import (std) StringMap
 
 
-type alias Cancel = VoidEffect;
+type alias Cancel = VoidEffect
 
-type alias Callback(a, e) = (Result(a, e)) -> VoidEffect;
+type alias Callback(a, e) = (Result(a, e)) -> VoidEffect
 
-type Task(a, e) = Task((Callback(a, e)) -> Effect(Cancel));
+type Task(a, e) = Task((Callback(a, e)) -> Effect(Cancel))
 
 succeed = fn (a) -> Task(
     fn (callback) -> do {
         callback(Ok(a));
         return Effect.noop
     },
-);
+)
 
 fail = fn (e): Task(a, e) -> Task(
     fn (callback) -> do {
         callback(Err(e));
         return Effect.noop
     },
-);
+)
 
 fork = fn (Task(callback), result_handler: Callback(a, e)): Effect(Cancel) ->
-    callback(result_handler);
+    callback(result_handler)
 
 map = fn (Task(previous): Task(a, e), f: (a) -> b): Task(b, e) -> Task(
     fn (next) -> previous(fn (result) -> next(Result.map(result, f))),
-);
+)
 
 map_err = fn (Task(previous): Task(a, e), f: (e) -> eek): Task(a, eek) -> Task(
     fn (next) -> previous(fn (result) -> next(Result.map_err(result, f))),
-);
+)
 
 and_then = fn (task: Task(a, e), f: (a) -> Task(b, e)): Task(b, e) -> sequence(
     map(task, f),
-);
+)
 
 from_effect = fn (effect: Effect(a)): Task(a, Unknown) -> Task(
     fn (callback) -> do {
@@ -84,7 +84,7 @@ from_effect = fn (effect: Effect(a)): Task(a, Unknown) -> Task(
         callback(result);
         return Effect.noop
     },
-);
+)
 
 sequence = fn (Task(previous): Task(Task(a, e), e)): Task(a, e) -> Task(
     fn (next) -> do {
@@ -105,14 +105,14 @@ sequence = fn (Task(previous): Task(Task(a, e), e)): Task(a, e) -> Task(
             cancel_next
         }
     },
-);
+)
 
 all_unbounded = fn (tasks: Array(Task(a, e))): Task(
     { oks: Array(a), errs: Array(e) },
     Never,
 ) ->
     let
-        tasks_length = Array.length(tasks);
+        tasks_length = Array.length(tasks)
     in
     Task(
         fn (callback) -> do {
@@ -176,7 +176,7 @@ all_unbounded = fn (tasks: Array(Task(a, e))): Task(
                 Effect.discard(Effect.sequence(StringMap.values(cancels)))
             }
         },
-    );
+    )
 
 race = fn (task_a: Task(a, e), task_b: Task(a, e)): Task(a, e) -> Task(
     fn (result_handler) -> do {
@@ -224,7 +224,7 @@ race = fn (task_a: Task(a, e), task_b: Task(a, e)): Task(a, e) -> Task(
             Maybe.with_default(cancel_b, Effect.noop)
         }
     },
-);
+)
 
 with_timeout = fn (task: Task(a, e), timeout: Duration): Task(Maybe(a), e) ->
     race(
@@ -233,23 +233,23 @@ with_timeout = fn (task: Task(a, e), timeout: Duration): Task(Maybe(a), e) ->
         sleep(timeout)
         |> map(fn (_) -> Nothing)
         |> map_err(Never.unreachable),
-    );
+    )
 
 sleep = fn (duration: Duration): Task(Unit, Never) -> Task(
     fn (result_handler) -> sleep_impl(
         duration_to_millis(duration),
         result_handler(Ok(unit)),
     ),
-);
+)
 
 type Duration =
     | Seconds(Int)
-    | Milliseconds(Int);
+    | Milliseconds(Int)
 
 duration_to_millis = fn (duration) ->
     match duration with
     | Seconds(secs) -> Int.multiply(secs, 1000)
     | Milliseconds(millis) -> millis
-    end;
+    end
 
-foreign sleep_impl: (Int, VoidEffect) -> Effect(Cancel);
+foreign sleep_impl: (Int, VoidEffect) -> Effect(Cancel)
