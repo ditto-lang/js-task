@@ -2,15 +2,12 @@ module Task.Test exports (
     main,
 )
 
+import (js-exception) Error
 import (js-exception) Exception
 
-import (js-unknown) Unknown (
-    Unknown,
-)
-
 import (std) Array
-import (std) Bool
 import (std) Effect
+import (std) Int
 import (std) Maybe (
     Maybe(..),
 )
@@ -28,20 +25,20 @@ import Task (
 
 type alias Log = (String) -> Effect(Unit)
 
-task_one = fn (log: Log): Task(Unit, Unknown) ->
-    Task.from_effect(log("task one: sleeping for 2 seconds"))
+type alias LogTask = (String) -> Task(Unit, String)
+
+task_one = fn (log: LogTask): Task(Unit, String) ->
+    log("task one: sleeping for 2 seconds")
     |> Task.and_then(fn (_) -> sleep(Task.Seconds(2)))
-    |> Task.and_then(fn (_) -> Task.from_effect(log("task one: done")))
+    |> Task.and_then(fn (_) -> log("task one: done"))
 
-task_two = fn (log: Log): Task(Unit, Unknown) ->
-    Task.from_effect(log("task two: sleeping for 4 seconds"))
+task_two = fn (log: LogTask): Task(Unit, String) ->
+    log("task two: sleeping for 4 seconds")
     |> Task.and_then(fn (_) -> sleep(Task.Seconds(4)))
-    |> Task.and_then(fn (_) -> Task.from_effect(log("task two: done")))
+    |> Task.and_then(fn (_) -> log("task two: done"))
 
-task_three = fn (log: Log): Task(Unit, Unknown) ->
-    Task.from_effect(
-        log("task three: sleeping for 10 seconds with 1 second timeout"),
-    )
+task_three = fn (log: LogTask): Task(Unit, String) ->
+    log("task three: sleeping for 10 seconds with 1 second timeout")
     |> Task.and_then(
         fn (_) ->
             sleep(Task.Seconds(10))
@@ -50,30 +47,58 @@ task_three = fn (log: Log): Task(Unit, Unknown) ->
     |> Task.and_then(
         fn (timed_out) ->
             match timed_out with
-            | Nothing -> Task.from_effect(log("task three: timed out"))
-            | Just(_) -> Task.from_effect(
-                do {
-                    log("task three: didn't time out?");
-                    Exception.throw("task three: didn't time out!?")
-                },
-            )
+            | Nothing -> log("task three: timed out")
+            | Just(_) -> Task.fail("task three: didn't time out?")
             end,
     )
 
-main = fn (log: Log, fail: Effect(Unit)): Effect(Unit) -> do {
-    let tasks = [task_one(log), task_two(log), task_three(log)];
+task_four = fn (log: LogTask): Task(Unit, String) ->
+    let
+        max_retries = 2
+    in
+    Task.with_retry(
+        max_retries,
+        fn (retries) ->
+            -- TODO: use literal pattern matching here when it's implemented
+            if Int.is_eq(retries, 0) then
+                log("task four: first attempt")
+                |> Task.and_then(fn (_) -> Task.fail("nope"))
+            else
+                log("task four: retry")
+                |> Task.and_then(
+                    fn (_) ->
+                        Task.sleep(
+                            -- Exponential backoff 👌
+                            Task.Seconds(pow_impl(2, retries)),
+                        )
+                        |> Task.map_err(Never.unreachable),
+                )
+                |> Task.and_then(
+                    fn (_) ->
+                        if Int.is_eq(retries, max_retries) then
+                            Task.succeed(unit)
+                        else
+                            Task.fail("nope"),
+                ),
+    )
+
+main = fn (log: Log): Effect(Unit) -> do {
+    let fail = Exception.throw(Error.new("tests failed", { cause = Nothing }));
+    let log_task: LogTask = fn (message) ->
+        Task.from_effect(log(message))
+        |> Task.map_err(fn (_) -> "log failed!?");
+    let tasks = [
+        task_one(log_task),
+        task_two(log_task),
+        task_three(log_task),
+        task_four(log_task),
+    ];
     Task.fork(
         Task.all_unbounded(tasks),
         fn (result) ->
             match result with
             | Ok(results) ->
-                if
-                    Array.is_empty(results.errs)
-                    |> Bool.not
-                then
-                    fail
-                else
-                    Effect.noop
+                if Array.is_empty(results.errs) then Effect.noop else fail
             | Err(_) -> fail
             end,
     );
@@ -92,3 +117,6 @@ main = fn (log: Log, fail: Effect(Unit)): Effect(Unit) -> do {
 sleep = fn (duration): Task(Unit, e) ->
     Task.sleep(duration)
     |> Task.map_err(Never.unreachable)
+
+-- TODO: add to std
+foreign pow_impl: (Int, Int) -> Int

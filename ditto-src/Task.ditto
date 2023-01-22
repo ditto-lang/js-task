@@ -1,7 +1,9 @@
 module Task exports (
     Task,
+    Cancel,
     Callback,
     Duration(..),
+    new,
     succeed,
     fail,
     fork,
@@ -13,11 +15,14 @@ module Task exports (
     and_then,
     race,
     with_timeout,
+    with_retry,
 )
 
 import (js-exception) Exception
 
-import (js-ref) Ref
+import (js-ref) Ref (
+    Ref,
+)
 
 import (js-unknown) Unknown (
     Unknown,
@@ -46,6 +51,8 @@ type alias Cancel = Effect(Unit)
 type alias Callback(a, e) = (Result(a, e)) -> Effect(Unit)
 
 type Task(a, e) = Task((Callback(a, e)) -> Effect(Cancel))
+
+new = Task
 
 succeed = fn (a) -> Task(
     fn (callback) -> do {
@@ -251,3 +258,46 @@ duration_to_millis = fn (duration) ->
     end
 
 foreign sleep_impl: (Int, Effect(Unit)) -> Effect(Cancel)
+
+with_retry = fn (max_retries: Int, task: (Int) -> Task(a, e)): Task(a, e) ->
+    Task(
+        fn (cb) -> do {
+            cancel_ref <- Ref.new(Effect.noop);
+            with_retry_aux(cb, task, 0, max_retries, cancel_ref);
+            return do {
+                cancel <- Ref.get(cancel_ref);
+                cancel
+            }
+        },
+    )
+
+with_retry_aux = fn (
+    cb: Callback(a, e),
+    task: (Int) -> Task(a, e),
+    retries: Int,
+    max_retries: Int,
+    cancel_ref: Ref(Cancel),
+): Effect(Unit) -> do {
+    cancel <- fork(
+        task(retries),
+        fn (result) ->
+            match result with
+            | Ok(a) -> cb(Ok(a))
+            | Err(e) ->
+                let
+                    bumped_retries = Int.add(retries, 1)
+                in
+                if Int.is_less_than_or_eq(bumped_retries, max_retries) then
+                    with_retry_aux(
+                        cb,
+                        task,
+                        bumped_retries,
+                        max_retries,
+                        cancel_ref,
+                    )
+                else
+                    cb(Err(e))
+            end,
+    );
+    Ref.set(cancel_ref, cancel)
+}
