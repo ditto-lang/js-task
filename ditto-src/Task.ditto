@@ -11,6 +11,7 @@ module Task exports (
     from_effect,
     map,
     map_err,
+    map_result,
     all_unbounded,
     and_then,
     race,
@@ -71,13 +72,20 @@ fail = fn (e): Task(a, e) -> Task(
 fork = fn (Task(callback), result_handler: Callback(a, e)): Effect(Cancel) ->
     callback(result_handler)
 
-map = fn (Task(previous): Task(a, e), f: (a) -> b): Task(b, e) -> Task(
-    fn (next) -> previous(fn (result) -> next(Result.map(result, f))),
+map = fn (task: Task(a, e), f: (a) -> b): Task(b, e) -> map_result(
+    task,
+    fn (result) -> Result.map(result, f),
 )
 
-map_err = fn (Task(previous): Task(a, e), f: (e) -> eek): Task(a, eek) -> Task(
-    fn (next) -> previous(fn (result) -> next(Result.map_err(result, f))),
+map_err = fn (task: Task(a, e), f: (e) -> eek): Task(a, eek) -> map_result(
+    task,
+    fn (result) -> Result.map_err(result, f),
 )
+
+map_result = fn (
+    Task(previous): Task(a, e),
+    f: (Result(a, e)) -> Result(b, eek),
+): Task(b, eek) -> Task(fn (next) -> previous(fn (result) -> next(f(result))))
 
 and_then = fn (task: Task(a, e), f: (a) -> Task(b, e)): Task(b, e) -> sequence(
     map(task, f),
